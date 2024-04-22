@@ -1,0 +1,18 @@
+[project]
+name = "vae"
+version = "0.0.1"
+authors = [
+  { name="Leonardo Perelli", email="leoperelli@gmail.com" },
+]
+description = "A simple implementation of Variatonal Auto Encoders."
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Homepage = "https://github.com/LeoPerelli/vae"
+Issues = "https://github.com/LeoPerelli/vae/issues"

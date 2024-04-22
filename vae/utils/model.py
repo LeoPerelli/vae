@@ -1,7 +1,7 @@
 from torch import nn
 import torch
 import torch.nn.functional as F
-from samplers import MultivariateNormal
+from vae.utils.samplers import MultivariateNormal
 
 
 class ResidualEncoderBlock(nn.Module):
@@ -52,7 +52,7 @@ class ResidualEncoderBlock(nn.Module):
 class ResidualEncoder(nn.Module):
     def __init__(self, in_channels_start, depth):
 
-        super().__init__
+        super().__init__()
         self.encoder_blocks = nn.ModuleList([])
         channels = in_channels_start
 
@@ -130,7 +130,7 @@ class ResidualDecoderBlock(nn.Module):
 class ResidualDecoder(nn.Module):
     def __init__(self, in_channels_start, depth):
 
-        super().__init__
+        super().__init__()
         self.decoder_blocks = nn.ModuleList([])
         channels = in_channels_start
 
@@ -167,7 +167,7 @@ class ResidualDecoder(nn.Module):
 class VariationalAutoEncoder(nn.Module):
     def __init__(self, encoder_decoder_depth, encoder_start_channels):
 
-        super().__init__
+        super().__init__()
 
         self.encoder = ResidualEncoder(in_channels_start=encoder_start_channels, depth=encoder_decoder_depth)
         self.decoder = ResidualEncoder(
