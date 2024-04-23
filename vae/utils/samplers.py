@@ -17,3 +17,12 @@ class MultivariateNormal:
     def sample_isotropic(self):
 
         return self.normal.sample()
+
+    def log_prob(self, log_mu, log_sigma, x):
+
+        mu = torch.exp(log_mu)
+        eye = torch.eye(int(log_mu.shape[1] ** 0.5))
+        sigma = torch.einsum("ij,k->kij", eye, torch.pow(torch.exp(log_sigma), 2))
+
+        gaussian = torch.distributions.MultivariateNormal(loc=mu, covariance_matrix=sigma)
+        return gaussian.log_prob(x)[:, None]

@@ -94,11 +94,12 @@ class ResidualDecoderBlock(nn.Module):
         stride = 1
         output_padding = 0
 
-        out_channels = in_channels if out_channels is None else out_channels
         if self.is_last_block:
             stride = 2
             output_padding = 1
-            out_channels = int(in_channels / 2)
+            out_channels = int(in_channels / 2) if out_channels is None else out_channels
+        out_channels = in_channels if out_channels is None else out_channels
+        self.residual = not is_last_block and not out_channels != in_channels
 
         self.conv1 = nn.ConvTranspose2d(
             in_channels=in_channels,
@@ -121,10 +122,10 @@ class ResidualDecoderBlock(nn.Module):
         out1 = F.relu(self.conv1(x))
         out2 = F.relu(self.conv2(out1))
 
-        if self.is_last_block:
-            return out2
-        else:
+        if self.residual:
             return x + out2
+        else:
+            return out2
 
 
 class ResidualDecoder(nn.Module):
@@ -135,15 +136,15 @@ class ResidualDecoder(nn.Module):
         channels = in_channels_start
 
         self.decoder_blocks.append(
-            ResidualDecoderBlock(in_channels=1, out_channels=channels, is_last_block=True)
+            ResidualDecoderBlock(in_channels=1, out_channels=channels, is_last_block=False)
         )
 
         for _ in range(depth):
             self.decoder_blocks.extend(
                 (
                     ResidualDecoderBlock(channels),
-                    ResidualDecoderBlock(channels // 2),
-                    ResidualDecoderBlock(channels // 2, is_last_block=True),
+                    ResidualDecoderBlock(channels),
+                    ResidualDecoderBlock(channels, is_last_block=True),
                 )
             )
             channels = int(channels / 2)
@@ -170,23 +171,57 @@ class VariationalAutoEncoder(nn.Module):
         super().__init__()
 
         self.encoder = ResidualEncoder(in_channels_start=encoder_start_channels, depth=encoder_decoder_depth)
-        self.decoder = ResidualEncoder(
-            in_channels_start=int(encoder_start_channels * (0.5) ** encoder_decoder_depth),
+        self.decoder = ResidualDecoder(
+            in_channels_start=int(encoder_start_channels * (2) ** encoder_decoder_depth),
             depth=encoder_decoder_depth,
         )
-        self.latent_dim = ...
-        self.pixel_dim = ...
+        self.latent_dim = 32 * 32
+        self.pixel_dim = 256 * 256
         self.encoder_sampler = MultivariateNormal(dimension=self.latent_dim)
         self.decoder_sampler = MultivariateNormal(dimension=self.pixel_dim)
 
     def generate(self):
 
-        z = self.encoder_sampler.sample_isotropic()
+        z = torch.unflatten(
+            input=self.encoder_sampler.sample_isotropic(), dim=1, sizes=(self.latent_dim**0.5, -1)
+        )[:, None, :, :]
         log_mu, log_sigma = self.decoder(z)
         flattened_x = self.decoder_sampler.sample(log_mu, log_sigma)
-        x = torch.unflatten(flattened_x, dim=2)
+        x = torch.unflatten(flattened_x, dim=2, sizes=(self.pixel_dim**0.5, -1))
 
         return x
+
+    def compute_loss(self, x, n_samples=1):
+
+        log_mu_z, log_sigma_z = self.encoder(x)
+        sigma_z = torch.exp(log_sigma_z)
+        mu_z = torch.exp(log_mu_z)
+        estimated_reconstruction_loss = self.estimate_reconstruction_loss(
+            x, log_mu_z, log_sigma_z, n_samples=n_samples
+        )
+        kl_divergence = 0.5 * (log_mu_z.shape[1] + 2 * log_mu_z - torch.pow(mu_z, 2) - torch.pow(sigma_z, 2))
+
+        return estimated_reconstruction_loss + kl_divergence
+
+    def estimate_reconstruction_loss(self, x, log_mu_z, log_sigma_z, n_samples=1):
+
+        log_probs = []
+        for _ in n_samples:
+            z = torch.unflatten(
+                input=self.encoder_sampler.sample(log_mu=log_mu_z, log_sigma=log_sigma_z),
+                dim=1,
+                sizes=(self.latent_dim**0.5, -1),
+            )[:, None, :, :]
+            log_mu_x, log_sigma_x = self.decoder(z)
+
+            log_probs.append(
+                self.decoder_sampler.log_prob(
+                    log_mu=log_mu_x, log_sigma=log_sigma_x, x=torch.flatten(x, start_dim=1)
+                )
+            )
+
+        probs = torch.stack(log_probs, dim=1)  # B x n_samples x 1
+        return probs.mean()
 
 
 # add tests for everything.
