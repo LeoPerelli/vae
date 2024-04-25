@@ -1,4 +1,10 @@
-from vae.utils.model import ResidualDecoder, ResidualDecoderBlock, ResidualEncoder, ResidualEncoderBlock
+from vae.utils.model import (
+    ResidualDecoder,
+    ResidualDecoderBlock,
+    ResidualEncoder,
+    ResidualEncoderBlock,
+    VariationalAutoEncoder,
+)
 import torch
 
 
@@ -73,3 +79,14 @@ def test_ResidualEncoder():
     v2 = list(log_sigma.shape) == [10, 1, 32 * 32]
 
     return all((v1, v2))
+
+
+def test_VariationalAutoEncoder():
+
+    vae = VariationalAutoEncoder(encoder_decoder_depth=3, encoder_start_channels=64)
+    y = vae.generate()
+
+    print(y.shape)
+
+
+test_VariationalAutoEncoder()

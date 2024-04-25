@@ -160,7 +160,7 @@ class ResidualDecoder(nn.Module):
             x = block(x)
 
         log_mu = x[:, :3, :]
-        log_sigma = x[:, :3, :]
+        log_sigma = x[:, 3:, :]
 
         return log_mu, log_sigma
 
@@ -183,11 +183,13 @@ class VariationalAutoEncoder(nn.Module):
     def generate(self):
 
         z = torch.unflatten(
-            input=self.encoder_sampler.sample_isotropic(), dim=1, sizes=(self.latent_dim**0.5, -1)
+            input=self.encoder_sampler.sample_isotropic()[None],
+            dim=1,
+            sizes=(int(self.latent_dim**0.5), -1),
         )[:, None, :, :]
         log_mu, log_sigma = self.decoder(z)
         flattened_x = self.decoder_sampler.sample(log_mu, log_sigma)
-        x = torch.unflatten(flattened_x, dim=2, sizes=(self.pixel_dim**0.5, -1))
+        x = torch.unflatten(flattened_x, dim=2, sizes=(int(self.pixel_dim**0.5), -1))
 
         return x
 
@@ -206,17 +208,17 @@ class VariationalAutoEncoder(nn.Module):
     def estimate_reconstruction_loss(self, x, log_mu_z, log_sigma_z, n_samples=1):
 
         log_probs = []
-        for _ in n_samples:
+        for _ in range(n_samples):
             z = torch.unflatten(
                 input=self.encoder_sampler.sample(log_mu=log_mu_z, log_sigma=log_sigma_z),
-                dim=1,
-                sizes=(self.latent_dim**0.5, -1),
-            )[:, None, :, :]
+                dim=2,
+                sizes=(int(self.latent_dim**0.5), -1),
+            )
             log_mu_x, log_sigma_x = self.decoder(z)
 
             log_probs.append(
                 self.decoder_sampler.log_prob(
-                    log_mu=log_mu_x, log_sigma=log_sigma_x, x=torch.flatten(x, start_dim=1)
+                    log_mu=log_mu_x, log_sigma=log_sigma_x, x=torch.flatten(x, start_dim=2)
                 )
             )
 
@@ -224,4 +226,7 @@ class VariationalAutoEncoder(nn.Module):
         return probs.mean()
 
 
-# add tests for everything.
+vae = VariationalAutoEncoder(encoder_decoder_depth=3, encoder_start_channels=64)
+x = torch.ones((2, 3, 256, 256))
+y = vae.compute_loss(x=x)
+# add tests for everything
