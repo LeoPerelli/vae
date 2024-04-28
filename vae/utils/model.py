@@ -203,9 +203,11 @@ class VariationalAutoEncoder(nn.Module):
         )
         kl_divergence = (
             0.5 * (torch.ones_like(log_mu_z) + 2 * log_mu_z - torch.pow(mu_z, 2) - torch.pow(sigma_z, 2))
-        ).sum()  # B x 1 x 1024 -> 1
+        ).sum(dim=2)[
+            0
+        ]  # B x 1 x 1024 -> B
 
-        return estimated_reconstruction_loss + kl_divergence
+        return (estimated_reconstruction_loss + kl_divergence).mean()
 
     def estimate_reconstruction_loss(self, x, log_mu_z, log_sigma_z, n_samples=1):
 
@@ -222,14 +224,15 @@ class VariationalAutoEncoder(nn.Module):
                 self.decoder_sampler.log_prob(
                     log_mu=log_mu_x, log_sigma=log_sigma_x, x=torch.flatten(x, start_dim=2)
                 )
-            )
+            )  # B x 3 x pixel_dim
 
-        probs = torch.stack(log_probs, dim=1)  # B x n_samples x 1
-        return probs.mean()
+        probs = torch.stack(log_probs, dim=1)  # B x n_samples x 3 x pixel_dim
+        probs = probs.sum(dim=[2, 3]).mean(dim=1)  # B
+        return probs
 
 
-vae = VariationalAutoEncoder(encoder_decoder_depth=3, encoder_start_channels=64)
-x = torch.ones((2, 3, 256, 256))
-y = vae.compute_loss(x=x)
-print(y)
+# vae = VariationalAutoEncoder(encoder_decoder_depth=3, encoder_start_channels=64)
+# x = torch.ones((2, 3, 256, 256))
+# y = vae.compute_loss(x=x)
+# print(y)
 # add tests for everything

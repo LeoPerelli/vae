@@ -21,12 +21,12 @@ class MultivariateNormal:
 
     def log_prob(self, log_mu, log_sigma, x):
 
+        original_shape = log_mu.shape
         mu = torch.exp(log_mu)
         sigma_square = torch.pow(torch.exp(log_sigma), 2)
-        sigma_square = torch.diag_embed(sigma_square[..., None].repeat_interleave(self.dimension, dim=-1))
 
-        mu = mu.flatten(end_dim=1)  # flatten the filter and batch in one size due to gaussian implementation
-        sigma_square = sigma_square.flatten(end_dim=1)
+        mu = mu.flatten()
+        sigma_square = sigma_square.flatten()
 
-        gaussian = torch.distributions.MultivariateNormal(loc=mu, covariance_matrix=sigma_square[:, 0, :, :])
-        return gaussian.log_prob(x.flatten(end_dim=1))
+        gaussian = torch.distributions.normal.Normal(loc=mu, scale=sigma_square)
+        return gaussian.log_prob(x.flatten()).unflatten(dim=0, sizes=original_shape)
