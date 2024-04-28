@@ -17,7 +17,7 @@ The VAE thus is an auto encoder where $p_{\theta}$ is the encoder and $q_{\phi}$
 The training objective is to maximize the log likelihood of the dataset. 
 By computing the log likelihood, one can derive that: 
 ```math
-log \text{ } p_{\theta}(\mathbf{x} | \mathbf{z} ) = KL(q_{\phi}(\mathbf{z} | \mathbf{x}) \text{ || } p_{\theta}(\mathbf{z} | \mathbf{x})) + \mathbb{E}_{q_{\phi}(\mathbf{z} | \mathbf{x})}[ - log \text{ } q_{\phi}(\mathbf{z} | \mathbf{x})  + log \text{ } p_{\theta} (\mathbf{x}, \mathbf{z}) ] \geq \mathbb{E}_{q_{\phi}(\mathbf{z} | \mathbf{x})}[ - log \text{ } q_{\phi}(\mathbf{z} | \mathbf{x})  + log \text{ } p_{\theta} (\mathbf{x}, \mathbf{z})]
+log \text{ } p_{\theta}(\mathbf{x} | \mathbf{z} ) = KL(q_{\phi}(\mathbf{z} | \mathbf{x}) || p_{\theta}(\mathbf{z} | \mathbf{x})) + \mathbb{E}_{q_{\phi}(\mathbf{z} | \mathbf{x})}[ - log \text{ } q_{\phi}(\mathbf{z} | \mathbf{x})  + log \text{ } p_{\theta} (\mathbf{x}, \mathbf{z}) ] \geq \mathbb{E}_{q_{\phi}(\mathbf{z} | \mathbf{x})}[ - log \text{ } q_{\phi}(\mathbf{z} | \mathbf{x})  + log \text{ } p_{\theta} (\mathbf{x}, \mathbf{z})]
 ```
 Since the KL divergence is greater or equal to 0, the expected value is referred to as lower evidence bound, as it is the lower bound for the value of the "evidence" $log \text{ } p_{\theta}(\mathbf{x} | \mathbf{z} )$.
 It is possible to futher derive that the lower bound is equal to:
