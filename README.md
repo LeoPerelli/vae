@@ -8,16 +8,16 @@ For simplicity, assume that $\mathbf{z} \sim \mathcal{N}(\mathbf{0}, \mathbf{I})
 Then, we try to learn some parametrized distribution $p_{\theta}(\mathbf{x} | \mathbf{z})$ which approximates $p(\mathbf{x}|\mathbf{z})$.
 In this case, the distribution is parametrized as a neural network.
 By Bayes theorem, we know that:
-$$ p_{\theta}(\mathbf{x}) = \frac{p_{\theta}(\mathbf{x} | \mathbf{z}) p(\mathbf{z})}{p_{\theta}(\mathbf{z} | \mathbf{x})} $$
-Since we use a neural network to learn $ p_{\theta}(\mathbf{x} | \mathbf{z}) $, we cannot invert it easily to obtain $ p_{\theta}(\mathbf{z} | \mathbf{x}) $.
-Hence, we approximate $ p_{\theta}(\mathbf{z} | \mathbf{x}) $ with another parametrized distribution $  q_{\phi}(\mathbf{z} | \mathbf{x}) $. 
-The VAE thus is an auto encoder where $p_{\theta}$ is the encoder and $q_{\phi} $ is the decoder.
+$$p_{\theta}(\mathbf{x}) = \frac{p_{\theta}(\mathbf{x} | \mathbf{z}) p(\mathbf{z})}{p_{\theta}(\mathbf{z} | \mathbf{x})}$$
+Since we use a neural network to learn $p_{\theta}(\mathbf{x} | \mathbf{z})$, we cannot invert it easily to obtain $p_{\theta}(\mathbf{z} | \mathbf{x})$.
+Hence, we approximate $p_{\theta}(\mathbf{z} | \mathbf{x})$ with another parametrized distribution $q_{\phi}(\mathbf{z} | \mathbf{x})$. 
+The VAE thus is an auto encoder where $p_{\theta}$ is the encoder and $q_{\phi}$ is the decoder.
 The training objective is to maximize the log likelihood of the dataset. 
 By computing the log likelihood, one can derive that: 
-$$log \text{ } p_{\theta}(\mathbf{x} | \mathbf{z} ) = KL(q_{\phi}(\mathbf{z} | \mathbf{x}) \text{ || } p_{\theta}(\mathbf{z} | \mathbf{x})) + \mathbb{E}_{q_{\phi}(\mathbf{z} | \mathbf{x})}[ - log \text{ } q_{\phi}(\mathbf{z} | \mathbf{x})  + log \text{ } p_{\theta} (\mathbf{x}, \mathbf{z}) ] \geq \mathbb{E}_{q_{\phi}(\mathbf{z} | \mathbf{x})}[ - log \text{ } q_{\phi}(\mathbf{z} | \mathbf{x})  + log \text{ } p_{\theta} (\mathbf{x}, \mathbf{z}) ] $$
-Since the KL divergence is greater or equal to 0, the expected value is referred to as lower evidence bound, as it is the lower bound for the value of the "evidence" $ log \text{ } p_{\theta}(\mathbf{x} | \mathbf{z} ) $.
+$$log \text{ } p_{\theta}(\mathbf{x} | \mathbf{z} ) = KL(q_{\phi}(\mathbf{z} | \mathbf{x}) \text{ || } p_{\theta}(\mathbf{z} | \mathbf{x})) + \mathbb{E}_{q_{\phi}(\mathbf{z} | \mathbf{x})}[ - log \text{ } q_{\phi}(\mathbf{z} | \mathbf{x})  + log \text{ } p_{\theta} (\mathbf{x}, \mathbf{z}) ] \geq \mathbb{E}_{q_{\phi}(\mathbf{z} | \mathbf{x})}[ - log \text{ } q_{\phi}(\mathbf{z} | \mathbf{x})  + log \text{ } p_{\theta} (\mathbf{x}, \mathbf{z}) ]$$
+Since the KL divergence is greater or equal to 0, the expected value is referred to as lower evidence bound, as it is the lower bound for the value of the "evidence" $log \text{ } p_{\theta}(\mathbf{x} | \mathbf{z} )$.
 It is possible to futher derive that the lower bound is equal to:
-$$  \mathbb{E}_{q_{\phi}(\mathbf{z} | \mathbf{x})}[ - log \text{ } q_{\phi}(\mathbf{z} | \mathbf{x})  + log \text{ } p_{\theta} (\mathbf{x}, \mathbf{z}) ] =  - KL(q_{\phi}(\mathbf{z} | \mathbf{x}) \text{ || } p(\mathbf{z}) ) + \mathbb{E}_{q_{\phi}(\mathbf{z} | \mathbf{x})}[ log \text{ } p_{\theta}( \mathbf{x} | \mathbf{z}) ] $$  
+$$\mathbb{E}_{q_{\phi}(\mathbf{z} | \mathbf{x})}[ - log \text{ } q_{\phi}(\mathbf{z} | \mathbf{x})  + log \text{ } p_{\theta} (\mathbf{x}, \mathbf{z}) ] =  - KL(q_{\phi}(\mathbf{z} | \mathbf{x}) \text{ || } p(\mathbf{z}) ) + \mathbb{E}_{q_{\phi}(\mathbf{z} | \mathbf{x})}[ log \text{ } p_{\theta}( \mathbf{x} | \mathbf{z}) ]$$  
 The two terms have a clear meaning. 
 The KL divergence acts as a regularization on the latent space, forcing $\mathbf{z} | \mathbf{x}$ to be close to the prior.
 The expectation term is a reconstruction error as it measures the likelihood $p_{\theta}(\mathbf{x} | \mathbf{z})$ when $\mathbf{z} | \mathbf{x}$. \
@@ -25,11 +25,11 @@ The expectation term is a reconstruction error as it measures the likelihood $p_
 An important thing to notice is the following: we cannot compute the expectation of the reconstruction loss in a closed form, because we would have to compute an integral.
 Integrals estimation is generally non tractable, meaning it requires algorithms which scale exponentially with dimension (generally these are variations of quadrature formulae).
 To estimate this integral instead we use a Monte Carlo approach. 
-Given the input $\mathbf{x}$, we sample $ \mathbf{z}^{l} \ \forall \ l=1,...,\text{L}$ from $ q_{\phi}(\mathbf{z} | \mathbf{x})$.
+Given the input $\mathbf{x}$, we sample $\mathbf{z}^{l} \ \forall \ l=1,...,\text{L}$ from $q_{\phi}(\mathbf{z} | \mathbf{x})$.
 Then, our Monte Carlo estimator is:
-$$ \mathbb{E}_{q_{\phi}(\mathbf{z} | \mathbf{x})}[ log \text{ } p_{\theta}( \mathbf{x} | \mathbf{z}) ] \approx \frac{1}{L} \sum_{l=1}^{L} log \ p_{\theta}( \mathbf{x} | \mathbf{z}^{l}) $$
+$$\mathbb{E}_{q_{\phi}(\mathbf{z} | \mathbf{x})}[ log \text{ } p_{\theta}( \mathbf{x} | \mathbf{z}) ] \approx \frac{1}{L} \sum_{l=1}^{L} log \ p_{\theta}( \mathbf{x} | \mathbf{z}^{l})$$
 In the experiments, it is common to use L = 1 and this still yields an estimator with sufficiently low variance.
-Furthermore, if we set $ q_{\phi} \sim \mathcal{N}(\mathbf{z} | \mathbf{x})$, we can compute the KL divergence in closed form.
+Furthermore, if we set $q_{\phi} \sim \mathcal{N}(\mathbf{z} | \mathbf{x})$, we can compute the KL divergence in closed form.
 
 # How is the Variational Auto Encoder implemented?
 The encoder and decoder networks of the variational auto encoder have to output a conditional distribution over $\mathbf{x}$ and $ \mathbf{z}$.
