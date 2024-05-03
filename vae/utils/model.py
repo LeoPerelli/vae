@@ -186,9 +186,9 @@ class VariationalAutoEncoder(nn.Module):
             input=self.encoder_sampler.sample_isotropic()[None],
             dim=1,
             sizes=(int(self.latent_dim**0.5), -1),
-        )[:, None, :, :]
+        )[:, None, :, :].to(next(self.parameters()).device)
         log_mu, log_sigma = self.decoder(z)
-        flattened_x = self.decoder_sampler.sample(log_mu, log_sigma)
+        flattened_x = self.decoder_sampler.sample(log_mu, log_sigma).to(next(self.parameters()).device)
         x = torch.unflatten(flattened_x, dim=2, sizes=(int(self.pixel_dim**0.5), -1))
 
         return x
@@ -198,7 +198,7 @@ class VariationalAutoEncoder(nn.Module):
         log_mu_z, log_sigma_z = self.encoder(x)
         sigma_z = torch.exp(log_sigma_z)
         mu_z = torch.exp(log_mu_z)
-        estimated_reconstruction_loss = self.estimate_reconstruction_loss(
+        estimated_reconstruction_likelihood = self.estimate_reconstruction_likelihood(
             x, log_mu_z, log_sigma_z, n_samples=n_samples
         )
         kl_divergence = (
@@ -207,9 +207,9 @@ class VariationalAutoEncoder(nn.Module):
             0
         ]  # B x 1 x 1024 -> B
 
-        return (estimated_reconstruction_loss + kl_divergence).mean()
+        return - (estimated_reconstruction_likelihood + kl_divergence).mean()
 
-    def estimate_reconstruction_loss(self, x, log_mu_z, log_sigma_z, n_samples=1):
+    def estimate_reconstruction_likelihood(self, x, log_mu_z, log_sigma_z, n_samples=1):
 
         log_probs = []
         for _ in range(n_samples):
