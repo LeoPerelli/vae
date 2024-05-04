@@ -24,10 +24,10 @@ class MultivariateNormal:
 
         original_shape = log_mu.shape
         mu = torch.exp(log_mu)
-        sigma_square = torch.pow(torch.exp(log_sigma), 2) + 0.001 * torch.ones_like(log_sigma)
+        sigma = torch.exp(log_sigma) + 0.001 * torch.ones_like(log_sigma)
 
         mu = mu.flatten()
-        sigma_square = sigma_square.flatten()
+        sigma = sigma.flatten()
 
-        gaussian = torch.distributions.normal.Normal(loc=mu, scale=sigma_square)
+        gaussian = torch.distributions.normal.Normal(loc=mu, scale=sigma)
         return gaussian.log_prob(x.flatten()).unflatten(dim=0, sizes=original_shape)

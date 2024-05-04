@@ -166,7 +166,7 @@ class ResidualDecoder(nn.Module):
 
 
 class VariationalAutoEncoder(nn.Module):
-    def __init__(self, encoder_decoder_depth, encoder_start_channels):
+    def __init__(self, encoder_decoder_depth, encoder_start_channels, img_dim = 256):
 
         super().__init__()
 
@@ -175,8 +175,8 @@ class VariationalAutoEncoder(nn.Module):
             in_channels_start=int(encoder_start_channels * (2) ** encoder_decoder_depth),
             depth=encoder_decoder_depth,
         )
-        self.latent_dim = 32 * 32
-        self.pixel_dim = 256 * 256
+        self.latent_dim = int(img_dim * 0.5** encoder_decoder_depth) ** 2
+        self.pixel_dim = img_dim * img_dim
         self.encoder_sampler = MultivariateNormal(dimension=self.latent_dim)
         self.decoder_sampler = MultivariateNormal(dimension=self.pixel_dim)
 
@@ -201,13 +201,13 @@ class VariationalAutoEncoder(nn.Module):
         estimated_reconstruction_likelihood = self.estimate_reconstruction_likelihood(
             x, log_mu_z, log_sigma_z, n_samples=n_samples
         )
-        kl_divergence = (
+        kl_divergence = -(
             0.5 * (torch.ones_like(log_mu_z) + 2 * log_mu_z - torch.pow(mu_z, 2) - torch.pow(sigma_z, 2))
         ).sum(dim=2)[
             0
         ]  # B x 1 x 1024 -> B
 
-        return - (estimated_reconstruction_likelihood + kl_divergence).mean()
+        return estimated_reconstruction_likelihood, kl_divergence
 
     def estimate_reconstruction_likelihood(self, x, log_mu_z, log_sigma_z, n_samples=1):
 
@@ -231,8 +231,101 @@ class VariationalAutoEncoder(nn.Module):
         return probs
 
 
-# vae = VariationalAutoEncoder(encoder_decoder_depth=3, encoder_start_channels=64)
+
+class SimpleVariationalAutoEncoder(nn.Module):
+    def __init__(self,):
+
+        super().__init__()
+
+        self.latent_dim = 200
+        self.hidden_dim = 400
+        self.pixel_dim = 784
+
+        # encoder
+        self.FC_input = nn.Linear(self.pixel_dim, self.hidden_dim)
+        self.FC_input2 = nn.Linear(self.hidden_dim, self.hidden_dim)
+        self.FC_mean  = nn.Linear(self.hidden_dim, self.latent_dim)
+        self.FC_var   = nn.Linear (self.hidden_dim, self.latent_dim)
+
+        self.relu = nn.ReLU()
+
+        # decoder
+        self.FC_hidden = nn.Linear(self.latent_dim, self.hidden_dim)
+        self.FC_hidden2 = nn.Linear(self.hidden_dim, self.hidden_dim)
+        self.FC_output_mean = nn.Linear(self.hidden_dim, self.pixel_dim)
+        self.FC_output_var = nn.Linear(self.hidden_dim, self.pixel_dim)
+
+        self.encoder_sampler = MultivariateNormal(dimension=self.latent_dim)
+        self.decoder_sampler = MultivariateNormal(dimension=self.pixel_dim)
+
+    def encoder(self,x):
+        h_       = self.relu(self.FC_input(x))
+        h_       = self.relu(self.FC_input2(h_))
+        log_mean     = self.FC_mean(h_)
+        log_var  = self.FC_var(h_)                                                
+        return log_mean, log_var
+
+    def decoder(self, z):
+        h     = self.relu(self.FC_hidden(z))
+        h     = self.relu(self.FC_hidden2(h))
+        log_mean = self.FC_output_mean(h)
+        log_var = self.FC_output_var(h)
+        return log_mean, log_var
+
+
+    def generate(self):
+
+        z = torch.unflatten(
+            input=self.encoder_sampler.sample_isotropic()[None],
+            dim=1,
+            sizes=(int(self.latent_dim**0.5), -1),
+        )[:, None, :, :].to(next(self.parameters()).device)
+        log_mu, log_sigma = self.decoder(z)
+        flattened_x = self.decoder_sampler.sample(log_mu, log_sigma).to(next(self.parameters()).device)
+        x = torch.unflatten(flattened_x, dim=2, sizes=(int(self.pixel_dim**0.5), -1))
+
+        return x
+
+    def compute_loss(self, x, n_samples=1):
+
+        log_mu_z, log_sigma_z = self.encoder(x)
+        sigma_z = torch.exp(log_sigma_z)
+        mu_z = torch.exp(log_mu_z)
+        estimated_reconstruction_likelihood = self.estimate_reconstruction_likelihood(
+            x, log_mu_z, log_sigma_z, n_samples=n_samples
+        )
+        kl_divergence = -(
+            0.5 * (torch.ones_like(log_mu_z) + 2 * log_sigma_z - torch.pow(mu_z, 2) - torch.pow(sigma_z, 2))
+        ).sum(dim=2)[0]  # B x 1 x 1024 -> B
+
+        return estimated_reconstruction_likelihood, kl_divergence
+
+    def estimate_reconstruction_likelihood(self, x, log_mu_z, log_sigma_z, n_samples=1):
+
+        log_probs = []
+        for _ in range(n_samples):
+            z = self.encoder_sampler.sample(log_mu=log_mu_z, log_sigma=log_sigma_z)
+            log_mu_x, log_sigma_x = self.decoder(z)
+
+            log_probs.append(
+                self.decoder_sampler.log_prob(
+                    log_mu=log_mu_x, log_sigma=log_sigma_x, x=x
+                )
+            )  # B x 3 x pixel_dim
+
+        probs = torch.stack(log_probs, dim=1)  # B x n_samples x 3 x pixel_dim
+        probs = probs.sum(dim=[2, 3]).mean(dim=1)  # B
+        return probs
+
+
+
+# vae = SimpleVariationalAutoEncoder()
+# x = torch.ones((2,1,784))
+# y = vae.compute_loss(x=x)
+
+
+# vae = VariationalAutoEncoder(encoder_decoder_depth=3, encoder_start_channels=32)
 # x = torch.ones((2, 3, 256, 256))
 # y = vae.compute_loss(x=x)
 # print(y)
-# add tests for everything
+
