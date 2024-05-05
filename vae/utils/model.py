@@ -50,13 +50,13 @@ class ResidualEncoderBlock(nn.Module):
 
 
 class ResidualEncoder(nn.Module):
-    def __init__(self, in_channels_start, depth):
+    def __init__(self, in_channels_start, depth, in_channels=3):
 
         super().__init__()
         self.encoder_blocks = nn.ModuleList([])
         channels = in_channels_start
 
-        self.encoder_blocks.append(ResidualEncoderBlock(in_channels=3, out_channels=channels, residual=False))
+        self.encoder_blocks.append(ResidualEncoderBlock(in_channels=in_channels, out_channels=channels, residual=False))
 
         for _ in range(depth):
             self.encoder_blocks.extend(
@@ -78,10 +78,10 @@ class ResidualEncoder(nn.Module):
         for block in self.encoder_blocks:
             x = block(x)
 
-        log_mu = x[:, [0], :]
-        log_sigma = x[:, [1], :]
+        mu = x[:, [0], :]
+        log_sigma = torch.clamp(x[:, [1], :], min=-20, max=2)
 
-        return log_mu, log_sigma
+        return mu, log_sigma
 
 
 class ResidualDecoderBlock(nn.Module):
@@ -129,10 +129,11 @@ class ResidualDecoderBlock(nn.Module):
 
 
 class ResidualDecoder(nn.Module):
-    def __init__(self, in_channels_start, depth):
+    def __init__(self, in_channels_start, depth, out_channels=3):
 
         super().__init__()
         self.decoder_blocks = nn.ModuleList([])
+        self.out_channels = out_channels
         channels = in_channels_start
 
         self.decoder_blocks.append(
@@ -150,7 +151,7 @@ class ResidualDecoder(nn.Module):
             channels = int(channels / 2)
 
         self.decoder_blocks.append(
-            nn.Conv2d(channels, 6, 1)
+            nn.Conv2d(channels, 2*out_channels, 1)
         )  # 6 output channels: one per RGB channel, and for each i have log_mu and log_sigma
         self.decoder_blocks.append(nn.Flatten(start_dim=2))  # flatten the feature maps to B x 6 x latent_dim
 
@@ -159,75 +160,110 @@ class ResidualDecoder(nn.Module):
         for block in self.decoder_blocks:
             x = block(x)
 
-        log_mu = x[:, :3, :]
-        log_sigma = x[:, 3:, :]
+        mu = torch.nn.functional.sigmoid(x[:, :self.out_channels, :])
+        log_sigma = torch.clamp(x[:, self.out_channels:, :], min=-20, max=2)
 
-        return log_mu, log_sigma
+        return mu, log_sigma
 
 
 class VariationalAutoEncoder(nn.Module):
-    def __init__(self, encoder_decoder_depth, encoder_start_channels, img_dim = 256):
+    def __init__(self, encoder_decoder_depth, encoder_start_channels, img_dim = 256, img_channels=3):
 
         super().__init__()
 
-        self.encoder = ResidualEncoder(in_channels_start=encoder_start_channels, depth=encoder_decoder_depth)
+        self.encoder = ResidualEncoder(in_channels_start=encoder_start_channels, depth=encoder_decoder_depth, in_channels=img_channels)
         self.decoder = ResidualDecoder(
             in_channels_start=int(encoder_start_channels * (2) ** encoder_decoder_depth),
-            depth=encoder_decoder_depth,
+            depth=encoder_decoder_depth, out_channels=img_channels,
         )
         self.latent_dim = int(img_dim * 0.5** encoder_decoder_depth) ** 2
         self.pixel_dim = img_dim * img_dim
         self.encoder_sampler = MultivariateNormal(dimension=self.latent_dim)
         self.decoder_sampler = MultivariateNormal(dimension=self.pixel_dim)
 
-    def generate(self):
+        self.activations = {module_name: [] for module_name, module in self.named_modules()}
+        # self.register_custom_hooks()
 
-        z = torch.unflatten(
-            input=self.encoder_sampler.sample_isotropic()[None],
-            dim=1,
-            sizes=(int(self.latent_dim**0.5), -1),
-        )[:, None, :, :].to(next(self.parameters()).device)
-        log_mu, log_sigma = self.decoder(z)
-        flattened_x = self.decoder_sampler.sample(log_mu, log_sigma).to(next(self.parameters()).device)
-        x = torch.unflatten(flattened_x, dim=2, sizes=(int(self.pixel_dim**0.5), -1))
+
+    def register_custom_hooks(self):
+
+        for module_name, module in self.named_modules():
+
+            def module_hook(_, __, outputs, module_name=module_name):
+                if isinstance(outputs, tuple):
+                    for i,output in enumerate(outputs):
+                        module_activation_name = f'{module_name}_{i}'
+                        if module_activation_name not in self.activations:
+                            self.activations[module_activation_name] = []
+                        self.activations[module_activation_name].append(output.detach().cpu())
+                else:
+                    self.activations[module_name].append(outputs.detach().cpu())
+            module.register_forward_hook(module_hook)
+
+
+    def generate(self, x=None):
+
+        if x is not None:
+            mu_z, log_sigma_z = self.encoder(x)
+            z = torch.unflatten(
+                input=self.encoder_sampler.sample(mu=mu_z, log_sigma=log_sigma_z),
+                dim=2,
+                sizes=(int(self.latent_dim**0.5), -1),
+            )  
+        else:
+            z = self.encoder_sampler.sample_isotropic().to(next(self.parameters()).device)[:,None, :, :]
+        mean, log_sigma = self.decoder(z)
+        flattened_x = self.decoder_sampler.sample(mean, log_sigma).to(next(self.parameters()).device)
+        x = torch.unflatten(mean, dim=2, sizes=(int(self.pixel_dim**0.5), -1))
 
         return x
 
-    def compute_loss(self, x, n_samples=1):
+    def compute_loss(self, x, n_samples=1, mse=False):
 
-        log_mu_z, log_sigma_z = self.encoder(x)
+
+        mu_z, log_sigma_z = self.encoder(x)
         sigma_z = torch.exp(log_sigma_z)
-        mu_z = torch.exp(log_mu_z)
-        estimated_reconstruction_likelihood = self.estimate_reconstruction_likelihood(
-            x, log_mu_z, log_sigma_z, n_samples=n_samples
-        )
+        
+        if mse:
+            mse_loss = nn.MSELoss()
+            z = torch.unflatten(
+                input=self.encoder_sampler.sample(mu=mu_z, log_sigma=log_sigma_z),
+                dim=2,
+                sizes=(int(self.latent_dim**0.5), -1),
+            )            
+            y, _ = self.decoder(z)
+            y = y.unflatten(dim=2, sizes=(int(y.shape[2]**0.5), -1))
+            estimated_reconstruction_likelihood = - mse_loss(x, y)
+        else:
+            estimated_reconstruction_likelihood = self.estimate_reconstruction_likelihood(
+                x, mu_z, log_sigma_z, n_samples=n_samples
+            )
         kl_divergence = -(
-            0.5 * (torch.ones_like(log_mu_z) + 2 * log_mu_z - torch.pow(mu_z, 2) - torch.pow(sigma_z, 2))
-        ).sum(dim=2)[
-            0
-        ]  # B x 1 x 1024 -> B
+            0.5 * (torch.ones_like(mu_z) + 2 * log_sigma_z - torch.pow(mu_z, 2) - torch.pow(sigma_z, 2))
+        ).sum(dim=2)[:,0]  # B x 1 x 1024 -> B
 
         return estimated_reconstruction_likelihood, kl_divergence
 
-    def estimate_reconstruction_likelihood(self, x, log_mu_z, log_sigma_z, n_samples=1):
+    def estimate_reconstruction_likelihood(self, x, mu_z, log_sigma_z, n_samples=1):
 
         log_probs = []
         for _ in range(n_samples):
             z = torch.unflatten(
-                input=self.encoder_sampler.sample(log_mu=log_mu_z, log_sigma=log_sigma_z),
+                input=self.encoder_sampler.sample(mu=mu_z, log_sigma=log_sigma_z),
                 dim=2,
                 sizes=(int(self.latent_dim**0.5), -1),
-            )
-            log_mu_x, log_sigma_x = self.decoder(z)
+            )            
+            mu_x, log_sigma_x = self.decoder(z)
 
             log_probs.append(
                 self.decoder_sampler.log_prob(
-                    log_mu=log_mu_x, log_sigma=log_sigma_x, x=torch.flatten(x, start_dim=2)
+                    mu=mu_x, log_sigma=log_sigma_x, x=x.flatten(start_dim=2)
                 )
             )  # B x 3 x pixel_dim
 
         probs = torch.stack(log_probs, dim=1)  # B x n_samples x 3 x pixel_dim
         probs = probs.sum(dim=[2, 3]).mean(dim=1)  # B
+        probs = torch.clamp(probs, min=torch.quantile(probs, 0.10), max = torch.quantile(probs, 0.999))
         return probs
 
 
@@ -237,8 +273,8 @@ class SimpleVariationalAutoEncoder(nn.Module):
 
         super().__init__()
 
-        self.latent_dim = 200
-        self.hidden_dim = 400
+        self.latent_dim = 64
+        self.hidden_dim = 128
         self.pixel_dim = 784
 
         # encoder
@@ -255,68 +291,99 @@ class SimpleVariationalAutoEncoder(nn.Module):
         self.FC_output_mean = nn.Linear(self.hidden_dim, self.pixel_dim)
         self.FC_output_var = nn.Linear(self.hidden_dim, self.pixel_dim)
 
+        # self.apply(self.weight_initialiser())
+
         self.encoder_sampler = MultivariateNormal(dimension=self.latent_dim)
         self.decoder_sampler = MultivariateNormal(dimension=self.pixel_dim)
+
+        self.activations = {module_name: [] for module_name, module in self.named_modules()}
+        self.register_custom_hooks()
+
+    def weight_initialiser(self):
+
+        def f(m):
+
+            if isinstance(m, torch.nn.Linear):
+                torch.nn.init.xavier_normal_(m.weight, gain=0.1)
+                m.bias.data.fill_(0.01)
+        return f
+
+    def register_custom_hooks(self):
+
+        for module_name, module in self.named_modules():
+
+            def module_hook(_, __, output, module_name=module_name):
+                self.activations[module_name].append(output.detach().cpu())
+            module.register_forward_hook(module_hook)
 
     def encoder(self,x):
         h_       = self.relu(self.FC_input(x))
         h_       = self.relu(self.FC_input2(h_))
-        log_mean     = self.FC_mean(h_)
-        log_var  = self.FC_var(h_)                                                
-        return log_mean, log_var
+        mean     = self.FC_mean(h_)
+        log_var  = torch.clamp(self.FC_var(h_), min=-20, max=1)
+        return mean, log_var
 
     def decoder(self, z):
         h     = self.relu(self.FC_hidden(z))
         h     = self.relu(self.FC_hidden2(h))
-        log_mean = self.FC_output_mean(h)
-        log_var = self.FC_output_var(h)
-        return log_mean, log_var
+        mean = torch.nn.functional.sigmoid(self.FC_output_mean(h))
+        log_var = torch.clamp(self.FC_output_var(h), min=-10, max=1)
+
+        return mean, log_var
 
 
-    def generate(self):
+    def generate(self, x=None):
 
-        z = torch.unflatten(
-            input=self.encoder_sampler.sample_isotropic()[None],
-            dim=1,
-            sizes=(int(self.latent_dim**0.5), -1),
-        )[:, None, :, :].to(next(self.parameters()).device)
-        log_mu, log_sigma = self.decoder(z)
-        flattened_x = self.decoder_sampler.sample(log_mu, log_sigma).to(next(self.parameters()).device)
-        x = torch.unflatten(flattened_x, dim=2, sizes=(int(self.pixel_dim**0.5), -1))
+        if x is not None:
+            mu_z, log_sigma_z = self.encoder(x)
+            z = self.encoder_sampler.sample(mu=mu_z, log_sigma=log_sigma_z)
+        else:
+            z = self.encoder_sampler.sample_isotropic().to(next(self.parameters()).device)[None, None, :]
+        mean, log_sigma = self.decoder(z)
+        flattened_x = self.decoder_sampler.sample(mean, log_sigma).to(next(self.parameters()).device)
+        x = torch.unflatten(mean, dim=2, sizes=(int(self.pixel_dim**0.5), -1))
 
         return x
 
-    def compute_loss(self, x, n_samples=1):
+    def compute_loss(self, x, n_samples=1, simple=False):
 
-        log_mu_z, log_sigma_z = self.encoder(x)
-        sigma_z = torch.exp(log_sigma_z)
-        mu_z = torch.exp(log_mu_z)
-        estimated_reconstruction_likelihood = self.estimate_reconstruction_likelihood(
-            x, log_mu_z, log_sigma_z, n_samples=n_samples
-        )
-        kl_divergence = -(
-            0.5 * (torch.ones_like(log_mu_z) + 2 * log_sigma_z - torch.pow(mu_z, 2) - torch.pow(sigma_z, 2))
-        ).sum(dim=2)[0]  # B x 1 x 1024 -> B
+        if simple:
+            mu_z, log_sigma_z = self.encoder(x)
+            z = self.encoder_sampler.sample(mu=mu_z, log_sigma=log_sigma_z)
+            mu_x, log_sigma_x = self.decoder(z)
+            reproduction_loss = nn.functional.binary_cross_entropy(mu_x, x, reduction='sum')
+            KLD      = - 0.5 * torch.sum(1+ 2*log_sigma_z - mu_z.pow(2) - (2*log_sigma_z).exp())
+            return - reproduction_loss, KLD
+        
+        else:
+            mu_z, log_sigma_z = self.encoder(x)
+            sigma_z = torch.exp(log_sigma_z)
+            estimated_reconstruction_likelihood = self.estimate_reconstruction_likelihood(
+                x, mu_z, log_sigma_z, n_samples=n_samples
+            )
+            kl_divergence = -(
+                0.5 * (torch.ones_like(mu_z) + 2 * log_sigma_z - torch.pow(mu_z, 2) - torch.pow(sigma_z, 2))
+            ).sum(dim=2)[:,0]  # B x 1 x 1024 -> B
 
-        return estimated_reconstruction_likelihood, kl_divergence
+            return estimated_reconstruction_likelihood, kl_divergence
 
-    def estimate_reconstruction_likelihood(self, x, log_mu_z, log_sigma_z, n_samples=1):
+    def estimate_reconstruction_likelihood(self, x, mu_z, log_sigma_z, n_samples=1):
 
         log_probs = []
         for _ in range(n_samples):
-            z = self.encoder_sampler.sample(log_mu=log_mu_z, log_sigma=log_sigma_z)
-            log_mu_x, log_sigma_x = self.decoder(z)
+            z = self.encoder_sampler.sample(mu=mu_z, log_sigma=log_sigma_z)
+            mu_x, log_sigma_x = self.decoder(z)
 
             log_probs.append(
                 self.decoder_sampler.log_prob(
-                    log_mu=log_mu_x, log_sigma=log_sigma_x, x=x
+                    mu=mu_x, log_sigma=log_sigma_x, x=x
                 )
             )  # B x 3 x pixel_dim
 
         probs = torch.stack(log_probs, dim=1)  # B x n_samples x 3 x pixel_dim
         probs = probs.sum(dim=[2, 3]).mean(dim=1)  # B
+        probs = torch.clamp(probs, min=-2000, max = 20000)
         return probs
-
 
 
 # vae = SimpleVariationalAutoEncoder()

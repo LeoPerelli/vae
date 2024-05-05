@@ -1,4 +1,5 @@
-from vae.utils.model import VariationalAutoEncoder
+from vae.utils.model import VariationalAutoEncoder, SimpleVariationalAutoEncoder
+from vae.training import VAEWrapper
 import torch
 from transformers import Trainer, TrainingArguments
 from datasets import load_dataset
@@ -11,29 +12,24 @@ import matplotlib.pyplot as plt
 
 
 
-
-class VAEWrapper(pl.LightningModule):
-    def __init__(self, vae):
-        super().__init__()
-        self.model = vae
-
-    def forward(self, batch):
-        return batch
-
-    def training_step(self, batch, batch_idx):
-        return self.model.compute_loss(batch)
-
-    def configure_optimizers(self):
-        optimizer = torch.optim.Adam(lr=3e-4, params=self.model.parameters())
-
-vae = VariationalAutoEncoder(encoder_decoder_depth=3, encoder_start_channels=64)
-model = VAEWrapper.load_from_checkpoint('/home/ec2-user/vae/trainings/lightning_logs/version_0/checkpoints/epoch=3-step=5628.ckpt', vae=vae)
+# vae = SimpleVariationalAutoEncoder()
+vae = VariationalAutoEncoder(encoder_decoder_depth=2, encoder_start_channels=32, img_channels=1, img_dim=28)
+model = VAEWrapper.load_from_checkpoint('/home/ec2-user/vae/trainings/lightning_logs/version_73/checkpoints/epoch=15-step=7504.ckpt', vae=vae)
 
 model = model.eval()
 
+dataset = load_dataset("mnist")['test'].shuffle().select(range(10))
+transform = Compose([Resize((28,28))])
+def img_processor_2(batch):
+    batch['x'] = [pil_to_tensor(transform(img)) for img in batch['image']]
+    return batch
+dataset.set_transform(img_processor_2)
 
 for i in range(10):
 
-    x = model.model.generate()
+    x = model.model.generate(x=dataset[i]['x'].float().to('cuda:0')[None])
+    print(x)
     ax = plt.imshow(x[0].detach().cpu().permute(1, 2, 0))
-    ax.figure.savefig(f'/home/ec2-user/vae/trainings/lightning_logs/version_0/{i}.png')
+    plt.colorbar()
+    ax.figure.savefig(f'/home/ec2-user/vae/trainings/lightning_logs/version_73/{i}.png')
+    plt.close()
