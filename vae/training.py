@@ -67,7 +67,7 @@ class VAEWrapper(pl.LightningModule):
 
 
     def configure_optimizers(self):
-        return torch.optim.Adam(lr=1e-3, params=self.model.parameters())
+        return torch.optim.Adam(lr=0.5e-4, params=self.model.parameters())
     
 # dataset = load_dataset("poloclub/diffusiondb", '2m_random_50k')
 # batch_size = 32
@@ -83,7 +83,7 @@ class VAEWrapper(pl.LightningModule):
 
 dataset = load_dataset("cifar10")
 batch_size = 128
-img_dim = 28
+img_dim = 32
 train_dataset = dataset['train']
 val_dataset = dataset['test']
 transform = Compose([Resize((img_dim,img_dim)), ToTensor()])
@@ -93,10 +93,10 @@ train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_s
 val_dataloader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size, collate_fn=collate_fn)
 
 # vae = SimpleVariationalAutoEncoder()
-vae = VariationalAutoEncoder(encoder_decoder_depth=2, encoder_start_channels=32, img_dim=28, img_channels=3)
+vae = VariationalAutoEncoder(encoder_decoder_depth=2, encoder_start_channels=64, img_dim=img_dim, img_channels=3)
 model = VAEWrapper(vae=vae)
 
 # default logger used by trainer (if tensorboard is installed)
 logger = TensorBoardLogger(save_dir='/home/ec2-user/vae/trainings')
-trainer = pl.Trainer(accelerator="gpu", default_root_dir='/home/ec2-user/vae/trainings', overfit_batches=0,max_epochs=100, logger=logger, log_every_n_steps=50, gradient_clip_val=1)
-trainer.fit(model=model, train_dataloaders=train_dataloader, val_dataloaders=val_dataloader)
+trainer = pl.Trainer(accelerator="gpu", default_root_dir='/home/ec2-user/vae/trainings', overfit_batches=0,max_epochs=200, logger=logger, log_every_n_steps=50)#, gradient_clip_val=1)
+trainer.fit(model=model, train_dataloaders=train_dataloader, val_dataloaders=val_dataloader, ckpt_path='/home/ec2-user/vae/trainings/lightning_logs/version_97/checkpoints/epoch=99-step=39000.ckpt')

@@ -50,11 +50,12 @@ class ResidualEncoderBlock(nn.Module):
 
 
 class ResidualEncoder(nn.Module):
-    def __init__(self, in_channels_start, depth, in_channels=3):
+    def __init__(self, in_channels_start, depth, in_channels=3, vq_format=False):
 
         super().__init__()
         self.encoder_blocks = nn.ModuleList([])
         channels = in_channels_start
+        self.vq_format = vq_format
 
         self.encoder_blocks.append(ResidualEncoderBlock(in_channels=in_channels, out_channels=channels, residual=False))
 
@@ -68,20 +69,25 @@ class ResidualEncoder(nn.Module):
             )
             channels = int(channels * 2)
 
-        self.encoder_blocks.append(nn.Conv2d(channels, 2, 1))
-        self.encoder_blocks.append(
-            nn.Flatten(start_dim=2)
-        )  # flatten the feature maps to B x C (=2, which are log mu and log ) x latent_dim
+        if not self.vq_format:
+            self.encoder_blocks.append(nn.Conv2d(channels, 2, 1))
+            self.encoder_blocks.append(
+                nn.Flatten(start_dim=2)
+            )  # flatten the feature maps to B x C (=2, which are log mu and log ) x latent_dim
 
     def forward(self, x):
 
         for block in self.encoder_blocks:
             x = block(x)
 
-        mu = x[:, [0], :]
-        log_sigma = torch.clamp(x[:, [1], :], min=-20, max=2)
+        if not self.vq_format:
+            mu = x[:, [0], :]
+            log_sigma = torch.clamp(x[:, [1], :], min=-20, max=2)
 
-        return mu, log_sigma
+            return mu, log_sigma
+        
+        else:
+            return x 
 
 
 class ResidualDecoderBlock(nn.Module):
@@ -94,20 +100,27 @@ class ResidualDecoderBlock(nn.Module):
         stride = 1
         output_padding = 0
 
+        assert in_channels is not None and out_channels is not None, "You have to specify at least in_channels or out_channels."
+
         if self.is_last_block:
             stride = 2
             output_padding = 1
             out_channels = int(in_channels / 2) if out_channels is None else out_channels
         out_channels = in_channels if out_channels is None else out_channels
-        self.residual = not is_last_block and not out_channels != in_channels
+        self.residual = not is_last_block and out_channels == in_channels
 
-        self.conv1 = nn.ConvTranspose2d(
-            in_channels=in_channels,
-            out_channels=out_channels,
-            kernel_size=kernel_size,
-            padding=1,
-            stride=1,
-        )
+        if in_channels is not None:
+            self.conv1 = nn.ConvTranspose2d(
+                in_channels=in_channels,
+                out_channels=out_channels,
+                kernel_size=kernel_size,
+                padding=1,
+                stride=1,
+            )
+        else:
+            self.conv1 = nn.LazyConvTranspose2d(out_channels=out_channels, kernel_size=kernel_size, padding=1, stride=1)
+
+
         self.conv2 = nn.ConvTranspose2d(
             in_channels=out_channels,
             out_channels=out_channels,
@@ -129,16 +142,24 @@ class ResidualDecoderBlock(nn.Module):
 
 
 class ResidualDecoder(nn.Module):
-    def __init__(self, in_channels_start, depth, out_channels=3):
+    def __init__(self, in_channels_start, depth, out_channels=3, vq_format=False):
 
         super().__init__()
         self.decoder_blocks = nn.ModuleList([])
         self.out_channels = out_channels
         channels = in_channels_start
+        self.vq_format = vq_format 
+
+        if self.vq_format:
+            in_channels = None # the ResidualDecoder is unaware of how many channels the encoder has. In this case, the TransposeConv layers use lazy initialization.
+        else:
+            in_channels = 1
+
 
         self.decoder_blocks.append(
-            ResidualDecoderBlock(in_channels=1, out_channels=channels, is_last_block=False)
+            ResidualDecoderBlock(in_channels=in_channels, out_channels=channels, is_last_block=False)
         )
+
 
         for _ in range(depth):
             self.decoder_blocks.extend(
@@ -384,6 +405,56 @@ class SimpleVariationalAutoEncoder(nn.Module):
         probs = probs.sum(dim=[2, 3]).mean(dim=1)  # B
         probs = torch.clamp(probs, min=-2000, max = 20000)
         return probs
+
+
+
+class VectorQuantizer(nn.Module):
+
+    def __init__(self, code_n, code_dim):
+
+        super().__init__()
+        self.code_n = code_n
+        self.code_dim = code_dim
+
+        self.codebook = nn.Parameter(torch.zeros((code_n, code_dim)))
+        self.loss = nn.MSELoss(reduction="mean")
+
+
+    def quantize(self, x):
+
+        assert len(x.shape) == 4 # x: B, C, H, W
+
+        x = x[:, None, ...] # x: B, 1, C, H, W
+        x = x.permute(0, 3, 4, 1, 2) # x: B, H, W, 1, C
+        nearest_code_ids = (self.codebook - x).square().sum(dim=4).argmin(dim=3) # x: B, H, W 
+        quantized_x = self.codebook[nearest_code_ids] # x: B, H, W, C
+        quantized_x = quantized_x.permute(0, 3, 1, 2)
+
+        quantized_x = x + (quantized_x - x).detach() 
+        # Straight through estimator! The gradients that will be accumulated from quantized_x onwards will be passed unchanged to x.
+        #  without this, the codebook would receive some gradient signal but it wouldn't be able to transmit this to x.
+        # Note that due to the indexing operation, only the codes which are actually chosen receive a gradient.
+        # The other ones are not updated. This is because argmin interrupts the gradient flow, otherwise the non chosen codes 
+        # might receive information to get closer to the data points, so that they would be chosen and thus influence the loss.
+
+        return quantized_x
+
+    def compute_quantization_loss(self, x, quantized_x, separate=True, beta=1.0):
+
+        quantized_x = self.quantize(x)
+        
+        if separate:
+            commitment_loss = self.loss(x, quantized_x.detach())
+            quantization_loss = self.loss(x.detach(), quantized_x)  
+            loss = quantization_loss + beta * commitment_loss
+
+        else:
+            loss = self.loss(x, quantized_x)
+
+        return loss
+
+
+
 
 
 # vae = SimpleVariationalAutoEncoder()
