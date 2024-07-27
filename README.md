@@ -53,4 +53,9 @@ Instead, if one computes equivalently $\mathbf{z} = \mu(\mathbf{x}) + \sigma(\ma
 # What are the limitations of the Variational Auto Encoder?
 Clearly, one of the main limitations is that you have to explicitly define the functional form of the distributions you use to approximate the real data distribution $p$.
 This limits the expressivity of the model. 
-Modern methods such as Normalising flows, Diffusion and Flow matching try to get rid of these constraints.
+I think of the encoder of the VAE in similar terms of Mixture Density Networks. 
+While the MDN explicitly define a GMM for every point in the space, the VAE only defines a Gaussian per point in the space. 
+However in both cases your budget of Gaussian distributions is infinite as there are infinitely many points on the space. 
+Therefore it looks like you should be able to approximate any sort of distribution, if you consider the distribution of the latent variable. 
+Of course, the main issue of VAE is that at decoding time, you cannot represent any distribution you want, but rather you are stuck with a Gaussian again. 
+Hence there still is some loss of flexibility in the functional form of the VAE.
